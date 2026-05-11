@@ -15,12 +15,21 @@ Turn a workflow video (typically a screen recording) into a detailed Standard Op
 
 ## Tooling (use only the fastest path)
 
-- **Whisper:** `whisper --model tiny.en --word_timestamps True --output_format json` (≈10× faster than `small.en`; quality fine for English). For non-English: `--model base` (drop `--language`).
+- **WhisperX:** `whisperx --model tiny.en --output_format json --compute_type int8 --device cpu` (built on faster-whisper + wav2vec2 forced alignment — word-level timestamps are tight (~±20ms) and on by default, no flag needed). For non-English: `--model base --language <code>`. Install once with `uv tool install whisperx`. First run downloads ~75 MB ASR model + ~360 MB English alignment model; both cache under `~/.cache/`.
 - **ffmpeg:** add `-hwaccel videotoolbox` for decode on macOS. We never re-encode video — we only extract audio and JPEG stills.
 - **Python 3** (stdlib only — no numpy, no cv2, no cloud APIs).
 - **Scripts:** `<skill-dir>/scripts/` (where `<skill-dir>` is the directory containing this SKILL.md — typically `~/.claude/skills/sopify/`)
   - `extract_frames.py` — smart frame sampling combining 4 signals (narration boundaries, action keywords, pause endpoints, scene change) → JPEGs + `frames.json` manifest
   - `merge_timeline.py` — interleave Whisper segments + described frames → `timeline.md`
+
+### Running long commands (whisperx, ffmpeg)
+
+`whisperx` is the slow step — expect **30s–3min on `tiny.en`** depending on video length, plus a one-time ~360 MB alignment-model download on the first run. Two acceptable patterns; **never mix them**:
+
+- **Foreground (preferred).** Call Bash with `timeout: 600000` (10 min). The skill blocks until whisperx finishes; no polling needed.
+- **Background.** Call Bash with `run_in_background: true`. The harness auto-notifies on completion — **do not** chain `sleep N && cat <task.output>`; the harness blocks that. If you genuinely need to check progress before the auto-notification fires, use the `Monitor` tool with an `until` loop, not `sleep`.
+
+Same rule applies to `ffmpeg` on long videos and to `extract_frames.py` on dense recordings.
 
 Working dir: `<source_video_dir>/sopify_out/<video_basename>/` (mkdir at start, persistent — every intermediate artifact lives here so the user can audit each step). Never use `/tmp/` for sopify outputs. The bundle co-locates with the source video so it's findable, version-controllable, and survives reboots.
 
@@ -63,7 +72,7 @@ START
   Yes
   ▼
 Step 1: ffmpeg              →  $WORK/audio.wav
-Step 2: whisper             →  $WORK/audio.json
+Step 2: whisperx            →  $WORK/audio.json
 Step 3: extract_frames.py   →  $WORK/frames/, $WORK/frames/frames.json
   │
   ▼
@@ -108,11 +117,13 @@ ffmpeg -y $HWACCEL -i "$VIDEO" -vn -ac 1 -ar 16000 "$WORK/audio.wav"
 
 ### Step 2 — Transcribe
 
+Run synchronously with a 10-minute timeout (`timeout: 600000` on the Bash call). Do not background + sleep — see "Running long commands" above.
+
 ```bash
-whisper "$WORK/audio.wav" --model tiny.en --word_timestamps True --output_format json --output_dir "$WORK"
+whisperx "$WORK/audio.wav" --model tiny.en --output_format json --compute_type int8 --device cpu --output_dir "$WORK"
 ```
 
-This writes `$WORK/audio.json` with segments and word-level timestamps.
+This writes `$WORK/audio.json` with segments and forced-aligned word-level timestamps (~±20ms vs. openai/whisper's ~±200ms). On Apple Silicon, `--compute_type int8 --device cpu` is the right combo — `faster-whisper` doesn't use MPS. Word timestamps come from WhisperX's alignment pass and are on by default; don't pass `--no_align` or `extract_frames.py`'s action-keyword cues will go dead.
 
 ### Step 3 — Smart frame sampling (4 signals combined)
 
@@ -312,3 +323,4 @@ If the user asked for split SOPs in Step 6, produce one tree per workflow alongs
 - **Describe what you see, not what you guess the screenshot says.** Low-res screen recordings invite OCR-style hallucination (claiming the button reads "Submit Form" when it actually reads "Submit Order"). When text is small or blurry, describe the UI element ("a blue primary button in the form footer") instead of inventing the label.
 - **Decisions ≠ steps.** A decision is a *branching choice* the operator must make ("is the customer new?", "is this invoice overdue?", "did the payment clear?"). A step is something the operator *does*. Don't promote every button click into `decisions.json` — only true branches where skipping or choosing the wrong path changes the outcome. If you find yourself with 15+ decisions, you're capturing steps; cut hard.
 - **The decision tree complements the SOP, it doesn't replace it.** Every branch outcome should reference the SOP step by number (`→ SOP step 4`) so the two documents stay synchronized. If you change SOP step numbering, update `DECISION_TREE.md` references in the same pass.
+- **Don't `sleep N && cat <task.output>` to wait for a background bash task.** The harness blocks this. Either run the long command in the foreground with `timeout: 600000`, or run it backgrounded and wait for the auto-notification. If you must poll, use `Monitor` with an `until` loop — never a leading `sleep`.

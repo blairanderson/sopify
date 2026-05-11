@@ -16,7 +16,7 @@ The pipeline is intentionally split so each stage is auditable in isolation:
 video ──► ffmpeg ──► audio.wav
                        │
                        ▼
-                  whisper (tiny.en, word_timestamps) ──► audio.json
+                  whisperx (tiny.en, forced alignment) ──► audio.json
                        │
                        ▼
    extract_frames.py (4-signal smart sampling) ──► frames/*.jpg + frames.json
@@ -74,7 +74,7 @@ WORK="$VIDEO_DIR/sopify_out/$VIDEO_BASE"
 mkdir -p "$WORK/frames"
 
 ffmpeg -y -hwaccel videotoolbox -i "$VIDEO" -vn -ac 1 -ar 16000 "$WORK/audio.wav"
-whisper "$WORK/audio.wav" --model tiny.en --word_timestamps True --output_format json --output_dir "$WORK"
+whisperx "$WORK/audio.wav" --model tiny.en --output_format json --compute_type int8 --device cpu --output_dir "$WORK"
 python3 scripts/extract_frames.py "$VIDEO" "$WORK/frames" "$WORK/audio.json"
 ```
 
