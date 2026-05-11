@@ -91,6 +91,7 @@ def main():
                 "path": fr.get("path", ""),
                 "description": fr.get("description", "(no description)"),
                 "index": fr.get("index"),
+                "source": fr.get("source", ""),
             },
         ))
 
@@ -125,7 +126,9 @@ def main():
         ts = fmt_ts(t)
         if kind == "visual":
             img_md_path = relpath_for_md(payload["path"], md_dir)
-            lines.append(f"## [{ts}] Visual")
+            src = payload.get("source") or ""
+            hdr = f"## [{ts}] Visual" + (f"  _(sampled @ {src})_" if src else "")
+            lines.append(hdr)
             lines.append(f"![]({img_md_path})")
             lines.append(f"Visual: {payload['description']}")
             lines.append("")

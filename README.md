@@ -53,9 +53,18 @@ All artifacts live under `/tmp/sopify/` so you can re-run, inspect, or copy them
 
 ## How the visual pass works
 
-There's no separate vision API. The skill drops frames at scene-change points using ffmpeg's built-in `select='gt(scene,0.3)'` filter, then asks Claude to `Read` each frame — and because Claude is multimodal, it actually sees the image. Claude writes a 1–3 sentence description (which app, what page, where the cursor is, what changed since the previous frame) and stores it back in the manifest. A small Python script then merges those descriptions with the Whisper transcript into a single chronological markdown file.
+There's no separate vision API. Frame description uses Claude's multimodal `Read` tool — Claude actually sees each image and writes a 1–3 sentence description (which app, what page, where the cursor is, what changed since the previous frame). A small Python script merges those descriptions with the Whisper transcript into a single chronological markdown file.
 
-Threshold is configurable: `0.2` for subtle UI changes (dropdown opens), `0.4+` for hard cuts only.
+### Smart sampling (not just scene change)
+
+Pixel-diff alone is naive for screen recordings — a click that opens a dropdown changes ~5% of the frame and never triggers a "scene." So we combine **four signals**:
+
+1. **Narration boundaries** — sample at the end of every Whisper segment (the result of what was just narrated is on screen).
+2. **Action-keyword cues** — when the narrator says `click / open / select / type / navigate / save / scroll / submit / press / hover / fill / paste / drag / upload / search / tap` etc., sample ~0.7s after the word.
+3. **Pause boundaries** — silences >1.5s mean the narrator stopped to do something; sample at the end of the pause.
+4. **Low-threshold scene change** — ffmpeg `scene=0.05` (tuned for UI changes, not hard cuts).
+
+Each frame in `frames.json` gets a `source` tag (`narration_end`, `action_keyword`, `pause_end`, `scene_change`, `opening`) so you can see *why* it was sampled.
 
 ## Repo structure
 
