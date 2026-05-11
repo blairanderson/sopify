@@ -5,7 +5,7 @@ description: Understand the business workflows happening in a screen recording, 
 
 # SOPify
 
-Turn a workflow video (typically a screen recording) into a detailed Standard Operating Procedure (SOP) markdown document. The skill **hears** what the user says (Whisper transcript) and **sees** what the user does (scene-change frame samples described inline), interleaves both into a raw timeline, and synthesizes a polished SOP.
+Turn a workflow video (typically a screen recording) into a detailed Standard Operating Procedure (SOP) markdown document **plus an ASCII box-drawing decision-tree diagram** of the branching choices an operator faces when running the workflow. The skill **hears** what the user says (Whisper transcript), **sees** what the user does (scene-change frame samples described inline), interleaves both into a raw timeline, tracks decision points along the way, and synthesizes both a polished SOP and a companion decision tree.
 
 ## Inputs
 
@@ -43,7 +43,9 @@ All subsequent steps reference `$WORK/` — not `/tmp/sopify/`. Example tree for
 │   └── frame_0001.jpg … frame_NNNN.jpg
 ├── frames_described.json
 ├── timeline.md
-└── SOP.md
+├── decisions.json
+├── SOP.md
+└── DECISION_TREE.md
 ```
 
 ---
@@ -81,7 +83,9 @@ Step 5: merge_timeline.py   →  $WORK/timeline.md
   └─ 2 +      ──> Ask: combined or split? WAIT.
   │
   ▼
-Step 7: Compose SOP(s)      →  $WORK/SOP.md  (or SOP_workflow_N.md)
+Step 6b: Finalize decisions →  $WORK/decisions.json
+Step 7: Compose SOP + tree  →  $WORK/SOP.md, $WORK/DECISION_TREE.md
+        (or SOP_workflow_N.md + DECISION_TREE_workflow_N.md)
 Step 8: Print paths + open. Done.
 ```
 
@@ -141,6 +145,7 @@ Read `$WORK/frames/frames.json`. For each entry, use the `Read` tool on the fram
 - What UI element is highlighted, focused, or being interacted with.
 - Where the cursor is and what it is hovering near.
 - What state has changed since the previous frame (modal opened, row added, field filled).
+- **Any decision point** the narrator just described or the UI just exposed — branching language like "if X then Y", "you can either…", "depending on whether…", "in case of…", "otherwise…", "if it's already…, skip to…", or a UI choice with multiple paths (radio buttons, conditional fields, confirmation modals, error-handling branches). When you spot one, append a candidate entry to `$WORK/decisions.json` as you go — see Step 6b for the schema. This is your working tmp file; it gets consolidated later.
 
 Format each description as a single string, e.g.:
 
@@ -171,7 +176,30 @@ Read `timeline.md` end to end. If the video contains **multiple distinct workflo
 
 If it's a single workflow, skip the question and proceed.
 
-### Step 7 — Synthesize the polished SOP
+### Step 6b — Finalize the decision list
+
+Re-read `timeline.md` end-to-end (you may already have it loaded from Step 6) and consolidate every branching choice into `$WORK/decisions.json` — a JSON list of objects. Merge any candidates you appended during Step 4, dedupe near-duplicates, drop trivial UI clicks, and order by `timestamp`:
+
+```json
+[
+  {
+    "id": 1,
+    "question": "Does the customer already exist in the system?",
+    "branches": [
+      { "label": "Yes", "outcome": "Skip to SOP step 3 (open new invoice)" },
+      { "label": "No",  "outcome": "Create the customer first — SOP step 2" }
+    ],
+    "source": "narration",
+    "timestamp": "00:01:42"
+  }
+]
+```
+
+- `source` is `narration` (narrator stated the branch), `visual` (UI exposed it — radio buttons, modal), or `both`.
+- Aim for **1–8 decisions per workflow**. More than 8 usually means you're capturing trivial UI clicks — a button press is not a decision unless skipping or choosing differently changes the outcome.
+- If the workflow is purely linear with zero branches, write `[]` and note this in Step 7 (the decision tree document will just say "This workflow is linear — no branches").
+
+### Step 7 — Synthesize the polished SOP and decision tree
 
 Compose `$WORK/SOP.md` (or one file per workflow if the user asked for splits — `$WORK/SOP_workflow_1.md`, `$WORK/SOP_workflow_2.md`, etc.) with this structure:
 
@@ -213,13 +241,58 @@ Only if the narrator mentioned what to do when X fails. Otherwise omit.
 
 Embed only **key** screenshots — typically one per numbered step at the moment the action commits (button clicked, form submitted, modal confirmed). All frames are still on disk under `$WORK/frames/` if the reader wants more.
 
+#### Decision tree (`DECISION_TREE.md`)
+
+Alongside the SOP, also compose `$WORK/DECISION_TREE.md` from `decisions.json`. Render the branches in ASCII box-drawing characters that match the style of this skill's own internal decision tree at the top of the workflow section:
+
+````markdown
+# <Workflow Title> — Decision Tree
+
+The branching choices an operator faces when running this workflow. See `SOP.md` for the step-by-step procedure.
+
+```
+START
+  │
+  ▼
+[<Question from decisions.json #1>]
+  ├─ <Branch A label> ──> <Outcome / SOP step reference>
+  └─ <Branch B label> ──> <Outcome / SOP step reference>
+  │
+  ▼
+[<Question #2>]
+  ├─ <Branch A> ──> <Outcome>
+  ├─ <Branch B> ──> <Outcome>
+  └─ <Branch C> ──> <Outcome>
+  │
+  ▼
+DONE
+```
+
+## Decision details
+
+### 1. <Question #1> (≈ 00:01:42)
+- **Yes** → <full sentence outcome, with SOP step link>
+- **No**  → <full sentence outcome, with SOP step link>
+
+### 2. <Question #2> (≈ 00:03:10)
+- ...
+````
+
+Conventions:
+- Each `[bracketed]` node is one decision. Each `├─` / `└─` line is a branch with its label and a brief outcome that **references the SOP step by number** (e.g. `→ SOP step 4`) so the reader can jump between the two documents.
+- Keep branch outcomes short on the diagram (one line); put the full explanation in the "Decision details" section below.
+- If `decisions.json` is empty (purely linear workflow), still write `DECISION_TREE.md` but with body: `This workflow is linear — no operator decisions. Follow SOP.md top to bottom.`
+
+If the user asked for split SOPs in Step 6, produce one tree per workflow alongside each SOP — `DECISION_TREE_workflow_1.md`, `DECISION_TREE_workflow_2.md`, etc.
+
 ### Step 8 — Deliver
 
 - Print all paths on separate lines so the user knows where everything is:
   - **SOP:** `$WORK/SOP.md`
+  - **Decision tree:** `$WORK/DECISION_TREE.md`
   - **Audit timeline:** `$WORK/timeline.md`
-  - **Full bundle:** `$WORK/` (also contains `audio.wav`, `audio.json`, `frames/`, `frames_described.json` — every intermediate the model produced, kept for auditing)
-- `open "$WORK/SOP.md"`
+  - **Full bundle:** `$WORK/` (also contains `audio.wav`, `audio.json`, `frames/`, `frames_described.json`, `decisions.json` — every intermediate the model produced, kept for auditing)
+- `open "$WORK/SOP.md" "$WORK/DECISION_TREE.md"`
 - Offer to:
   - Re-run with a different scene threshold (`--scene 0.02` for more frames, `--scene 0.05 --gap 0.8` for fewer) if the SOP missed a step or has too many redundant frames.
   - Split into multiple SOPs (or merge them) if the scope question in Step 6 was answered wrong.
@@ -237,3 +310,5 @@ Embed only **key** screenshots — typically one per numbered step at the moment
 - **State the plan in one line, then act.** Don't narrate every frame extraction iteration.
 - **`path` fields in `frames_described.json` are relative, not absolute.** The bundle is portable — `sops/sopify_out/<video>/` can be moved to another machine. Absolute `/tmp/...` or `$WORK/...` paths break this; always emit `frames/frame_NNNN.jpg`.
 - **Describe what you see, not what you guess the screenshot says.** Low-res screen recordings invite OCR-style hallucination (claiming the button reads "Submit Form" when it actually reads "Submit Order"). When text is small or blurry, describe the UI element ("a blue primary button in the form footer") instead of inventing the label.
+- **Decisions ≠ steps.** A decision is a *branching choice* the operator must make ("is the customer new?", "is this invoice overdue?", "did the payment clear?"). A step is something the operator *does*. Don't promote every button click into `decisions.json` — only true branches where skipping or choosing the wrong path changes the outcome. If you find yourself with 15+ decisions, you're capturing steps; cut hard.
+- **The decision tree complements the SOP, it doesn't replace it.** Every branch outcome should reference the SOP step by number (`→ SOP step 4`) so the two documents stay synchronized. If you change SOP step numbering, update `DECISION_TREE.md` references in the same pass.
